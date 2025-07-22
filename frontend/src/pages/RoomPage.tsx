@@ -5,6 +5,12 @@ import MediaControls from "../components/MediaControls";
 import Player from "../components/Player";
 import type { Device } from "mediasoup-client";
 import { Button } from "../components/ui/button";
+import type { Producer } from "mediasoup-client/types";
+
+interface UserStreams {
+  camera?: MediaStream;
+  screenshare?: MediaStream;
+}
 
 const RoomPage = () => {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -16,8 +22,8 @@ const RoomPage = () => {
     createSendTransport,
     createRecvTransport,
     produce,
-    localStream,
-    setLocalStream, // Make sure this exists in the hook
+    // localStream,
+    // setLocalStream, // Make sure this exists in the hook
     connected,
     socket,
     consume,
@@ -28,21 +34,33 @@ const RoomPage = () => {
   const [joined, setJoined] = useState(false);
   const consumedProducersRef = useRef<Set<string>>(new Set());
   const [remoteStreams, setRemoteStreams] = useState<
-    Record<string, MediaStream[]>
+    Record<string, UserStreams>
   >({});
 
-  const localStreamRef = useRef<MediaStream | null>(null);
+  const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
+  const [screenShareStream, setScreenShareStream] =
+    useState<MediaStream | null>(null);
+  const [screenProducer, setScreenProducer] = useState<Producer | null>(null);
+
+  const localProducersRef = useRef<Record<string, Producer | null>>({
+    camera: null,
+    mic: null,
+    screenshare: null,
+    screen: null,
+  });
 
   const consumeAndAddTrack = useCallback(
     async ({
       producerId,
       userId,
       kind,
+      appData,
       device,
     }: {
       producerId: string;
       userId: string;
       kind: "audio" | "video";
+      appData?: Record<string, any>;
       device: Device;
     }) => {
       if (consumedProducersRef.current.has(producerId)) return;
@@ -52,37 +70,38 @@ const RoomPage = () => {
         device.rtpCapabilities,
         (stream: MediaStream) => {
           consumedProducersRef.current.add(producerId);
+
+          const [newTrack] = stream.getTracks();
+          const source =
+            appData?.source === "screenshare" ? "screenshare" : "camera";
+
           // En vez de añadir el track al mismo MediaStream, añadimos el nuevo stream al array
           setRemoteStreams((prevStreams) => {
             const newStreams = { ...prevStreams };
             if (!newStreams[userId]) {
-              newStreams[userId] = [stream];
-            } else {
-              // Evitar duplicados por si acaso
-              const alreadyExists = newStreams[userId].some((s) => {
-                // Compara por id de track
-                const trackIds = s.getTracks().map((t) => t.id);
-                const newTrackIds = stream.getTracks().map((t) => t.id);
-                return trackIds.some((id) => newTrackIds.includes(id));
-              });
-              if (!alreadyExists) {
-                newStreams[userId] = [...newStreams[userId], stream];
-              }
+              newStreams[userId] = {};
             }
-            return newStreams;
+
+            if (!newStreams[userId][source]) {
+              newStreams[userId][source] = new MediaStream();
+            }
+
+            newStreams[userId][source]!.addTrack(newTrack);
+
+            return { ...newStreams };
           });
-        }
+        },
       );
     },
-    [consume]
+    [consume],
   );
 
   const handleUserLeft = ({ userId }: { userId: string }) => {
     setRemoteStreams((prevStreams) => {
       const newStreams = { ...prevStreams };
       if (newStreams[userId]) {
-        newStreams[userId].forEach((stream) => {
-          stream.getTracks().forEach((track) => track.stop());
+        Object.values(newStreams[userId]).forEach((stream) => {
+          stream?.getTracks().forEach((track) => track.stop());
         });
         delete newStreams[userId];
       }
@@ -96,11 +115,17 @@ const RoomPage = () => {
     const currentDevice = deviceRef.current;
     if (!currentDevice) return;
 
-    const handleNewProducer = async ({ producerId, userId, kind }: any) => {
+    const handleNewProducer = async ({
+      producerId,
+      userId,
+      kind,
+      appData,
+    }: any) => {
       await consumeAndAddTrack({
         producerId,
         userId,
         kind,
+        appData,
         device: currentDevice,
       });
     };
@@ -121,8 +146,8 @@ const RoomPage = () => {
         audio: true,
         video: true,
       });
-      localStreamRef.current = stream;
-      setLocalStream?.(stream); // Ensure hook exposes this
+
+      setCameraStream(stream);
 
       const { producers: existingProducers } = await joinRoom(roomId);
       setSearchParams({ room: roomId });
@@ -134,15 +159,20 @@ const RoomPage = () => {
       const mediasoupDevice = await loadDevice(rtpCapabilities as any);
       await createSendTransport();
       await createRecvTransport();
-      await produce(stream);
+      const camProducers = await produce(stream, { source: "camera" });
+      camProducers.forEach((p) => {
+        if (p.kind === "video") localProducersRef.current.camera = p;
+        if (p.kind === "audio") localProducersRef.current.mic = p;
+      });
 
       setJoined(true);
 
-      for (const { producerId, userId, kind } of existingProducers) {
+      for (const { producerId, userId, kind, appData } of existingProducers) {
         await consumeAndAddTrack({
           producerId,
           userId,
           kind,
+          appData,
           device: mediasoupDevice,
         });
       }
@@ -151,6 +181,46 @@ const RoomPage = () => {
       setJoined(false);
       setSearchParams({});
     }
+  };
+
+  const handleStartScreenShare = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: true,
+      });
+      setScreenShareStream(stream);
+
+      const screenshareProducer = await produce(stream, {
+        source: "screenshare",
+      });
+
+      const videoProducer = screenshareProducer.find((p) => p.kind === "video");
+
+      if (videoProducer) {
+        localProducersRef.current.screen = videoProducer;
+
+        stream.getVideoTracks()[0].onended = () => {
+          handleStopScreenShare();
+        };
+      }
+    } catch (error) {
+      console.error("Error starting screen share:", error);
+      setScreenStream(null);
+    }
+  };
+
+  const handleStopScreenShare = () => {
+    const screenProducer = localProducersRef.current.screen;
+    if (!screenProducer) return;
+
+    console.log("Stopping screen share");
+
+    // notify mediasoup to close the producer
+    screenProducer.close();
+    localProducersRef.current.screen = null;
+
+    screenShareStream?.getTracks().forEach((track) => track.stop());
+    setScreenShareStream(null);
   };
 
   const handleLeaveRoom = () => {
@@ -191,22 +261,44 @@ const RoomPage = () => {
             </Button>
           </div>
           <div className="grid grid-cols-2 gap-4 mt-4">
-            {localStream && <Player stream={localStream} name="You" you />}
-            {Object.entries(remoteStreams).map(([userId, streams]) =>
-              streams.map((stream, idx) => (
-                <Player
-                  key={userId + "-" + idx}
-                  stream={stream}
-                  name={`User ${userId}${streams.length > 1 ? ` (${idx + 1})` : ""}`}
-                  you={false}
-                />
-              ))
+            {cameraStream && (
+              <Player stream={cameraStream} name="You (Camera)" you />
             )}
+            {screenShareStream && (
+              <Player stream={screenShareStream} name="You (Screen)" you />
+            )}
+            {Object.entries(remoteStreams).map(([userId, userStreams]) => (
+              <>
+                {userStreams.camera && (
+                  <Player
+                    key={`${userId}-camera`}
+                    stream={userStreams.camera}
+                    name={`User ${userId} (Camera)`}
+                    you={false}
+                  />
+                )}
+                {userStreams.screenshare && (
+                  <Player
+                    key={`${userId}-screen`}
+                    stream={userStreams.screenshare}
+                    name={`User ${userId} (Screen)`}
+                    you={false}
+                  />
+                )}
+              </>
+            ))}
           </div>
         </>
       )}
-      {joined && localStream && (
-        <MediaControls localStream={localStream} produce={produce} joined={joined} />
+      {joined && cameraStream && (
+        <MediaControls
+          localStream={cameraStream}
+          isScreenSharing={!!screenShareStream}
+          onStartScreenSharing={handleStartScreenShare}
+          onStopScreenSharing={handleStopScreenShare}
+          // produce={produce}
+          // joined={joined}
+        />
       )}
     </div>
   );

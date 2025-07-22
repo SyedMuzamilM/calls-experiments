@@ -14,6 +14,7 @@ interface JoinResponse {
     producerId: string;
     userId: string;
     kind: "audio" | "video";
+    appData?: Record<string, any>;
   }[];
 }
 
@@ -22,8 +23,8 @@ export function useMediasoupClient() {
   const deviceRef = useRef<Device | null>(null);
   const sendTransportRef = useRef<Transport | null>(null);
   const recvTransportRef = useRef<Transport | null>(null);
-  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
-  const [remoteStreams, setRemoteStreams] = useState<MediaStream[]>([]);
+  // const [localStream, setLocalStream] = useState<MediaStream | null>(null);
+  // const [remoteStreams, setRemoteStreams] = useState<MediaStream[]>([]);
 
   // Join or create a room
   const joinRoom = useCallback(
@@ -60,9 +61,9 @@ export function useMediasoupClient() {
                   console.log("------------------------");
                   resolve(response);
                 }
-              }
+              },
             );
-          }
+          },
         );
 
         console.log("Successfully joined room:", roomId);
@@ -72,7 +73,7 @@ export function useMediasoupClient() {
         throw error;
       }
     },
-    [socket, connected]
+    [socket, connected],
   );
 
   // Load mediasoup device
@@ -125,14 +126,14 @@ export function useMediasoupClient() {
                     (response: { connected: boolean; error?: string }) => {
                       if (response.error || !response.connected) {
                         errback(
-                          new Error(response.error || "Connection failed")
+                          new Error(response.error || "Connection failed"),
                         );
                       } else {
                         callback();
                       }
-                    }
+                    },
                   );
-                }
+                },
               );
 
               transport.on(
@@ -145,14 +146,14 @@ export function useMediasoupClient() {
                     (response: { id?: string; error?: string }) => {
                       if (response.error || !response.id) {
                         errback(
-                          new Error(response.error || "Production failed")
+                          new Error(response.error || "Production failed"),
                         );
                       } else {
                         callback({ id: response.id });
                       }
-                    }
+                    },
                   );
-                }
+                },
               );
 
               sendTransportRef.current = transport;
@@ -162,7 +163,7 @@ export function useMediasoupClient() {
               console.error("Error creating send transport:", error);
               reject(error);
             }
-          }
+          },
         );
       });
     } catch (error) {
@@ -187,66 +188,72 @@ export function useMediasoupClient() {
               (res: { connected: boolean }) => {
                 if (res.connected) cb();
                 else errCb(new Error("Failed to connect transport"));
-              }
+              },
             );
           });
           recvTransportRef.current = transport;
           resolve(transport);
-        }
+        },
       );
     });
   }, [socket]);
 
   // Produce local media
-  const produce = useCallback(async (stream: MediaStream) => {
-    if (!sendTransportRef.current) {
-      console.error("Send transport not ready");
-      return;
-    }
+  const produce = useCallback(
+    async (stream: MediaStream, appData?: Record<string, any>) => {
+      if (!sendTransportRef.current) {
+        console.error("Send transport not ready");
+        return [];
+      }
 
-    try {
-      console.log(
-        "Got user media, tracks:",
-        stream.getTracks().map((t) => t.kind)
-      );
-      setLocalStream(stream);
+      try {
+        console.log(
+          "Got user media, tracks:",
+          stream.getTracks().map((t) => t.kind),
+        );
+        // setLocalStream(stream);
 
-      const producers = [];
-      for (const track of stream.getTracks()) {
-        console.log(`Producing ${track.kind} track`);
-        try {
-          const producer = await sendTransportRef.current.produce({ track });
-          console.log(
-            `Successfully produced ${track.kind} track:`,
-            producer.id
-          );
-          producers.push(producer);
-        } catch (error) {
-          console.error(`Failed to produce ${track.kind} track:`, error);
-          // Continue with other tracks even if one fails
+        const producers = [];
+        for (const track of stream.getTracks()) {
+          console.log(`Producing ${track.kind} track`);
+          try {
+            const producer = await sendTransportRef.current.produce({
+              track,
+              appData,
+            });
+            console.log(
+              `Successfully produced ${track.kind} track:`,
+              producer.id,
+            );
+            producers.push(producer);
+          } catch (error) {
+            console.error(`Failed to produce ${track.kind} track:`, error);
+            // Continue with other tracks even if one fails
+          }
         }
-      }
 
-      if (producers.length === 0) {
-        console.error("Failed to produce any media tracks");
-        // Cleanup the stream since we couldn't produce any tracks
-        stream.getTracks().forEach((track) => track.stop());
-        setLocalStream(null);
-      }
+        if (producers.length === 0) {
+          console.error("Failed to produce any media tracks");
+          // Cleanup the stream since we couldn't produce any tracks
+          stream.getTracks().forEach((track) => track.stop());
+          // setLocalStream(null);
+        }
 
-      return producers;
-    } catch (error) {
-      console.error("Error in produce:", error);
-      throw error;
-    }
-  }, []);
+        return producers;
+      } catch (error) {
+        console.error("Error in produce:", error);
+        throw error;
+      }
+    },
+    [],
+  );
 
   // Consume remote media
   const consume = useCallback(
     async (
       producerId: string,
       rtpCapabilities: RtpCapabilities,
-      onStream?: (stream: MediaStream) => void
+      onStream?: (stream: MediaStream) => void,
     ) => {
       if (!socket || !recvTransportRef.current) {
         console.error("Cannot consume - transport or socket not ready");
@@ -302,13 +309,13 @@ export function useMediasoupClient() {
             } catch (error) {
               console.error("Error while consuming:", error);
             }
-          }
+          },
         );
       } catch (error) {
         console.error("Error in consume function:", error);
       }
     },
-    [socket]
+    [socket],
   );
 
   return {
@@ -318,9 +325,9 @@ export function useMediasoupClient() {
     createRecvTransport,
     produce,
     consume,
-    localStream,
-    setLocalStream,
-    remoteStreams,
+    // localStream,
+    // setLocalStream,
+    // remoteStreams,
     connected,
     socket,
     device: deviceRef.current,

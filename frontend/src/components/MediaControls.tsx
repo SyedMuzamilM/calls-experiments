@@ -4,14 +4,23 @@ import { Share } from "lucide-react";
 
 interface MediaControlsProps {
   localStream: MediaStream | null;
-  produce: (stream: MediaStream) => Promise<any>;
-  joined: boolean;
+  // produce: (stream: MediaStream, appData?: Record<string, any>) => Promise<any>;
+  // joined: boolean;
+  isScreenSharing: boolean;
+  onStartScreenSharing: () => Promise<void>;
+  onStopScreenSharing: () => void;
 }
 
-const MediaControls = ({ localStream, produce, joined }: MediaControlsProps) => {
+const MediaControls = ({
+  localStream,
+  // produce,
+  // joined,
+  isScreenSharing,
+  onStartScreenSharing,
+  onStopScreenSharing,
+}: MediaControlsProps) => {
   const [isCameraOn, setIsCameraOn] = useState(true);
   const [isMicOn, setIsMicOn] = useState(true);
-  const [isScreenSharing, setIsScreenSharing] = useState(false); // Nuevo estado
   const localStreamRef = useRef<MediaStream | null>(null);
 
   useEffect(() => {
@@ -21,7 +30,9 @@ const MediaControls = ({ localStream, produce, joined }: MediaControlsProps) => 
   const toggleCamera = () => {
     if (localStreamRef.current) {
       localStreamRef.current.getVideoTracks().forEach((track) => {
-        track.enabled = !isCameraOn;
+        if (track.getSettings().displaySurface !== "monitor") {
+          track.enabled = !isCameraOn;
+        }
       });
       setIsCameraOn((prev) => !prev);
     }
@@ -38,35 +49,10 @@ const MediaControls = ({ localStream, produce, joined }: MediaControlsProps) => 
 
   // Nueva función para manejar el click en compartir pantalla
   const handleScreenShare = async () => {
-    if (!isScreenSharing) {
-      try {
-        // Captura la pantalla
-        const screenStream = await navigator.mediaDevices.getDisplayMedia({
-          video: true
-        });
-        // Produce el stream de pantalla
-        await produce(screenStream);
-        setIsScreenSharing(true);
-        // Detecta si el usuario detiene el screen share desde el navegador
-        const [screenTrack] = screenStream.getVideoTracks();
-        screenTrack.onended = () => {
-          setIsScreenSharing(false);
-        };
-      } catch (err) {
-        console.error("Error al compartir pantalla:", err);
-        setIsScreenSharing(false);
-      }
+    if (isScreenSharing) {
+      onStopScreenSharing();
     } else {
-      // Si ya está compartiendo, detener el screen share
-      // Buscar el track de pantalla y detenerlo
-      if (localStreamRef.current) {
-        localStreamRef.current.getVideoTracks().forEach((track) => {
-          if (track.label.toLowerCase().includes("screen") || track.label.toLowerCase().includes("display")) {
-            track.stop();
-          }
-        });
-      }
-      setIsScreenSharing(false);
+      onStartScreenSharing();
     }
   };
 
@@ -81,16 +67,14 @@ const MediaControls = ({ localStream, produce, joined }: MediaControlsProps) => 
       <Button variant={isMicOn ? "default" : "outline"} onClick={toggleMic}>
         {isMicOn ? "Mute Mic" : "Unmute Mic"}
       </Button>
-      {localStream && (
-        <Button
-          variant={isScreenSharing ? "default" : "outline"}
-          onClick={handleScreenShare}
-          className={isScreenSharing ? "bg-blue-600 text-white" : ""}
-        >
-          <Share className="mr-2 h-5 w-5" />
-          {isScreenSharing ? "Stop Sharing" : "Share Screen"}
-        </Button>
-      )}
+      <Button
+        variant={isScreenSharing ? "default" : "outline"}
+        onClick={handleScreenShare}
+        className={isScreenSharing ? "bg-blue-600 text-white" : ""}
+      >
+        <Share className="mr-2 h-5 w-5" />
+        {isScreenSharing ? "Stop Sharing" : "Share Screen"}
+      </Button>
     </div>
   );
 };
